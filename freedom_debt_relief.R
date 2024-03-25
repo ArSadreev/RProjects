@@ -50,18 +50,29 @@ deposit_by_month <- deposit_df_clean %>%
 
 deposit_by_month %>% ggplot(
     aes(x = month_name, y = amount, colour = deposit_type, group = deposit_type)) + 
-    geom_line() + labs(y = 'Millions of $', x = 'Month #', title = 'Aggregate deposits: Actual vs. Scheduled') 
+    geom_line() + labs(y = 'Millions of $', x = 'Month #', title = 'Aggregate deposits: Actual vs. Scheduled')
+
+# Let's calculate how much exactly marketing campaign in month 3 brought actual deposits 
+# compared to month 2 since actual deposits are the ones that are converted into revenue.
+
+deposit_by_month %>% filter(deposit_type == "Actual Deposit", month_name == "Month 2"| month_name == "Month 3") 
+# As we can see there is only $5.1 mm jump in actual deposits over a month 
+#if we assume that freedom debt relief has a take rate of 20%, then net impact on net revenue is just ~$1mm
+# which means that freedom debt relief lost ~$4mm in net income running this campaign.
 
 # 2.1 Client Analysis ----
 
+#Calculating a number of distinct clients by month who made actual deposits
 actual_deposit_count <- deposit_df_clean %>% filter(
     deposit_type == 'Actual Deposit') %>% group_by(month_name) %>% 
-    summarise(actual_deposit_count = n_distinct(client_id)) #Calculating a number of distinct clients by month who made actual deposits
+    summarise(actual_deposit_count = n_distinct(client_id)) 
 
+#Calculating a number of distinct clients by month who made actual deposits
 scheduled_deposit_count <- deposit_df_clean %>% filter(
     deposit_type == 'Scheduled Deposit') %>% group_by(month_name) %>% 
     summarise(scheduled_deposit_count = n_distinct(client_id)) #Calculating a number of distinct clients by month who had scheduled deposits
 
+#Combining the two
 combined_deposit_count <- merge(actual_deposit_count,scheduled_deposit_count, by.y = "month_name") %>% 
     mutate(difference = actual_deposit_count-scheduled_deposit_count) #Combining the two
 
@@ -70,7 +81,8 @@ combined_deposit_count %>% ggplot(aes(x = month_name)) +
     geom_bar(aes(y = scheduled_deposit_count, fill = "Scheduled"),stat = "identity", just = 0.1, width = 0.2, alpha = 0.6) +
     labs(title = "Actual vs Scheduled Deposit Count", x = "Month", y = "Deposit Count") +
     theme_minimal() #Visualizing the results
-    
+#We see that marketing campaign brought around ~10,000 unique actual deposits in month 3 which is almost ~30% increase over Month 2
+
 
 # 3.0 Creating tidy table to prepare for A/B test ----
 
@@ -86,8 +98,8 @@ deposit_df_tidy <- deposit_df_tidy %>% left_join(client_data, by = join_by(clien
 
 # 3.1 A/B Test ----
 
-#Purpose of this test is to see whether a customer group that was attracted using advertising is bringing more revenue compared
-# to the other group
+#Purpose of this test is to see whether a customer group that was attracted using advertising is bringing more revenue on average compared
+#to the other group
 
 deposit_df_tidy <- deposit_df_tidy %>% mutate(
   assignment = case_when(month_3 > 0 & month_1 == 0 & month_2 == 0 ~ "treatment", .default = "control"))
@@ -109,7 +121,7 @@ deposit_df_tidy <- deposit_df_tidy %>% mutate(
 deposit_df_tidy <- deposit_df_tidy %>% mutate(
   avg_fees = fees_earned / n_months) #dividing total fees by number of months to see how much a given client brought on avg.
 
-
+set.seed(22)
 t_tests <- replicate(100, {
   deposit_control_sample <- deposit_df_tidy %>% filter(assignment == "control")
   deposit_treatment_sample <- deposit_df_tidy %>% filter(assignment == "treatment")
@@ -131,24 +143,29 @@ average_diff <- mean(c(mean(conf_intervals$conf.low), mean(conf_intervals$conf.h
 p_values <- as.data.frame((t(t_tests[5,])))
 p_values <- sapply(p_values, function(x) sapply(x, "[", 2)) %>% as.tibble() #Extracting p values to see if results were significant
 
+conf_intervals <- conf_intervals %>% mutate(p_values = p_values)
+conf_intervals <- conf_intervals %>% mutate(significance = case_when(p_values < 0.05 ~ "significant",
+                                                                     p_values > 0.05 ~ "not significant"))
+                                            
+                                            
+# 3.2 A/B tests plots ----
 
-# Plot
+ggplot(p_values, aes(x = value)) + geom_density() #Highly skewed distribution of p values towards the left
 
-ggplot(p_values, aes(x = value)) + geom_density() 
-
-ggplot(conf_intervals, aes()) +
+ggplot(conf_intervals, aes(color = significance)) +
   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high, y = interval)) +
   geom_vline(xintercept = average_diff)+
   annotate("text", x = average_diff, y = Inf, label = "Average difference in two groups", vjust = 0.9, hjust = -0.1, size = 3) +
   labs(title = "Confidence Intervals", x = "Range", y = "Intervals #") +
   theme_minimal() #This graph shows average $ difference between two groups across 100 simulations. On average marketing campaign
-                  #brought clients who bring 2.5$ worth of monthly revenue more than no treatment group.
+                  #brought clients who bring 2.5$ worth of monthly revenue more than no treatment group taking into account both significant
+                  #and not significant estimates.
 
 
 #total_fees_sim <- replicate(100, {
 #  deposit_control_sample <- deposit_df_tidy %>% filter(assignment == "control")
 #  deposit_treatment_sample <- deposit_df_tidy %>% filter(assignment == "treatment")
-# sample_ind_control <- sample(1:nrow(deposit_control_sample), nrow(deposit_treatment_sample), replace = TRUE)
+#  sample_ind_control <- sample(1:nrow(deposit_control_sample), nrow(deposit_treatment_sample), replace = TRUE)
 #  sample_ind_treatment <- sample(1:nrow(deposit_treatment_sample), nrow(deposit_treatment_sample), replace = TRUE)
 #  deposit_control_sample <- deposit_control_sample[sample_ind_control,]
 #  deposit_treatment_sample <- deposit_treatment_sample[sample_ind_treatment,]
@@ -159,6 +176,10 @@ ggplot(conf_intervals, aes()) +
 #estimated_fees <- sapply(total_fees_sim[,2], function(x) sapply(x, "[", 1)) %>% as.data.frame() %>% unname() %>% t() %>% as.tibble()
 #colnames(estimated_fees) <- c("control","treatment")
 
+#4.0 Exploring how other factors influence net revenue ----
+ggplot(na.omit(deposit_df_tidy), aes(x=fees_earned, y=client_age)) + geom_point() + geom_smooth(method = "lm") + xlim(0,1500) + facet_grid(client_residence_status~client_geographical_region) #West region appears to be bringing more revenue
+#among all regions. However, it appears that people own their homes instead of renting appear to be more indebted. 
+#There is no correlation between age and fees earned.
 
 
 
