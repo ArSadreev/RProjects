@@ -1,10 +1,19 @@
 
+#Assignment
+#Imagine that Freedom ran a recent marketing campaign to promote the value 
+#proposition of how the debt relief program helps people achieve financial freedom. 
+#Assume the cost of this campaign was $5 million. There are five months of data in the datasets provided. 
+#Let’s say campaign took place over the course of the third month. 
+#You now want to show the marketing, sales and operations teams just how successful this campaign was.
+
+
 #Loading libraries ----
 
 library(tidyverse)
 library(lubridate)
 library(stringr)
 library(broom)
+library(data.table)
 
 
 # 1.0 Data & Experiment Setup ----
@@ -77,6 +86,9 @@ deposit_df_tidy <- deposit_df_tidy %>% left_join(client_data, by = join_by(clien
 
 # 3.1 A/B Test ----
 
+#Purpose of this test is to see whether a customer group that was attracted using advertising is bringing more revenue compared
+# to the other group
+
 deposit_df_tidy <- deposit_df_tidy %>% mutate(
   assignment = case_when(month_3 > 0 & month_1 == 0 & month_2 == 0 ~ "treatment", .default = "control"))
 
@@ -92,44 +104,63 @@ count_function <- function(x) {
 n_months <- apply(deposit_df_tidy %>% select(month_5:month_3) %>% apply(2, count_function), 1, sum) %>% as.tibble()
 
 deposit_df_tidy <- deposit_df_tidy %>% mutate(
-  n_months = n_months$value)
+  n_months = n_months$value) #Number of months a given client is making deposits
 
 deposit_df_tidy <- deposit_df_tidy %>% mutate(
-  avg_fees = fees_earned / n_months)
+  avg_fees = fees_earned / n_months) #dividing total fees by number of months to see how much a given client brought on avg.
 
 
 t_tests <- replicate(100, {
-  sample_ind_control <- sample(1:nrow(filter(deposit_df_tidy, assignment == "control")), nrow(filter(deposit_df_tidy, assignment == "treatment")), replace = TRUE)
-  sample_ind_treatment <- sample(1:nrow(filter(deposit_df_tidy, assignment == "treatment")), nrow(filter(deposit_df_tidy, assignment == "treatment")), replace = TRUE)
-  deposit_control_sample <- deposit_df_tidy[sample_ind_control,]
-  deposit_treatment_sample <- deposit_df_tidy[sample_ind_treatment,]
+  deposit_control_sample <- deposit_df_tidy %>% filter(assignment == "control")
+  deposit_treatment_sample <- deposit_df_tidy %>% filter(assignment == "treatment")
+  sample_ind_control <- sample(1:nrow(deposit_control_sample), nrow(deposit_treatment_sample), replace = TRUE)
+  sample_ind_treatment <- sample(1:nrow(deposit_treatment_sample), nrow(deposit_treatment_sample), replace = TRUE)
+  deposit_control_sample <- deposit_control_sample[sample_ind_control,]
+  deposit_treatment_sample <- deposit_treatment_sample[sample_ind_treatment,]
   sample <- union_all(deposit_control_sample, deposit_treatment_sample)
   result <- lm(data = sample, avg_fees ~ assignment)
   tidy(result,conf.int = TRUE)
-})
+}) #Since we have uneven data split between treatment group and no treatment group, I bootstrapping to compare two groups running the test 100 times to make sure I have robust results.
 
 conf_intervals <- as.data.frame(t(t_tests[6:7,]))
-conf_intervals <- lapply(conf_intervals, function(x) sapply(x, "[", 2)) %>% as.tibble()
+conf_intervals <- lapply(conf_intervals, function(x) sapply(x, "[", 2)) %>% as.tibble() #Getting confidence intervals from conducted t tests
 
 conf_intervals$interval <- seq_len(nrow(conf_intervals))
-average_diff <- mean(c(mean(conf_intervals$conf.low), mean(conf_intervals$conf.high)))
+average_diff <- mean(c(mean(conf_intervals$conf.low), mean(conf_intervals$conf.high))) #Averaging confidence intervals
 
 p_values <- as.data.frame((t(t_tests[5,])))
-p_values <- sapply(p_values, function(x) sapply(x, "[", 2)) %>% as.tibble()
-
-
+p_values <- sapply(p_values, function(x) sapply(x, "[", 2)) %>% as.tibble() #Extracting p values to see if results were significant
 
 
 # Plot
 
-ggplot(p_values, aes(x = value)) + geom_density()
-
+ggplot(p_values, aes(x = value)) + geom_density() 
 
 ggplot(conf_intervals, aes()) +
   geom_errorbarh(aes(xmin = conf.low, xmax = conf.high, y = interval)) +
   geom_vline(xintercept = average_diff)+
   annotate("text", x = average_diff, y = Inf, label = "Average difference in two groups", vjust = 0.9, hjust = -0.1, size = 3) +
   labs(title = "Confidence Intervals", x = "Range", y = "Intervals #") +
-  theme_minimal()
+  theme_minimal() #This graph shows average $ difference between two groups across 100 simulations. On average marketing campaign
+                  #brought clients who bring 2.5$ worth of monthly revenue more than no treatment group.
+
+
+#total_fees_sim <- replicate(100, {
+#  deposit_control_sample <- deposit_df_tidy %>% filter(assignment == "control")
+#  deposit_treatment_sample <- deposit_df_tidy %>% filter(assignment == "treatment")
+# sample_ind_control <- sample(1:nrow(deposit_control_sample), nrow(deposit_treatment_sample), replace = TRUE)
+#  sample_ind_treatment <- sample(1:nrow(deposit_treatment_sample), nrow(deposit_treatment_sample), replace = TRUE)
+#  deposit_control_sample <- deposit_control_sample[sample_ind_control,]
+#  deposit_treatment_sample <- deposit_treatment_sample[sample_ind_treatment,]
+#  sample <- union_all(deposit_control_sample, deposit_treatment_sample)
+#  sample <- sample %>% group_by(assignment) %>% summarise(fees = sum(fees_earned))
+#})
+#total_fees_sim <- t(total_fees_sim)
+#estimated_fees <- sapply(total_fees_sim[,2], function(x) sapply(x, "[", 1)) %>% as.data.frame() %>% unname() %>% t() %>% as.tibble()
+#colnames(estimated_fees) <- c("control","treatment")
+
+
+
+
 
 
