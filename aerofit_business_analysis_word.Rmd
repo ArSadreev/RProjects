@@ -1,0 +1,225 @@
+---
+title: "AeroFit Business Analysis`"
+author: "Artem Sadreev"
+date: "2023-02-07"
+output: officedown::rdocx_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = FALSE,
+    # Table Captioning
+    tab.cap.style = "Table Caption",
+    tab.cap.pre = "Table ",
+    tab.cap.sep = ": ",
+    # Figure Captioning
+    fig.cap.style = "Image Caption",
+    fig.cap.pre = "Figure ",
+    fig.cap.sep = ": "
+)
+
+# LIBRARIES
+library(officedown)
+library(officer)
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(GGally)
+library(data.table)
+library(correlationfunnel)
+```
+
+## My Other Projects  
+
+Sign Up Here: <https://github.com/ArSadreev/RProjects>
+
+## Executive Summary
+
+The market research team at AeroFit wants to identify the characteristics of the target audience for KP281 treadmill offered by the company, to provide a better recommendation of the treadmills to new customers. The team decides to investigate whether there are differences across the product with respect to customer characteristics.
+I am perform descriptive analytics to create a customer profile for each AeroFit treadmill product by developing appropriate tables and charts.
+    
+Product Portfolio:
+
+The KP281 is an entry-level treadmill that sells for $1,500;
+The KP481 is for mid-level runners and sells for $1,750;
+The KP781 treadmill is having advanced features and it sells for $2,500.
+
+\newpage
+
+## Table of Contents
+
+```{r}
+block_toc()
+```
+
+
+\newpage
+
+## Data Exploration
+
+```{r loading data}
+df <- read.csv("./Data/aerofit_treadmill_data.csv")
+```
+
+Customer population is slightly skewed towards males 57% vs 42% for females.
+
+```{r tab.cap="gender distribution", fig.id = "gender_tab", fig.cap.style = "Table Caption"}
+tab_1 <- df %>% group_by(Gender) %>% summarise(population = n()) %>% mutate(percentage = population[]/sum(population)*100)
+tab_1 <- data.table(tab_1)
+tab_1
+```
+
+Figure \@ref(fig:cor_map) points out some correlations that might be worth exploring such as the fact that fitness level is correlated with education more for males than females. Also, fitness level and education seems to be more correlated with income for males rather than females. In addition, all variables appear to be skewed to the right for males rather than females.
+
+```{r fig.cap="gender correlation map", fig.id = "cor_map", fig.cap.style = "Image Caption"}
+ggpairs(df,
+        columns = c(2, 4, 6, 7, 8, 9),
+        aes(colour = Gender),
+        progress = FALSE,
+        lower = "blank",
+        upper = list(continuous = wrap("cor", size = 3))) +
+  geom_density(alpha = 0.5) +
+  theme_grey() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(panel.spacing = unit(0.5, "lines"))
+```
+
+\newpage
+
+Table \@ref(tab:prod_gender) shows us that female users have the highest probability (52.6%) of purchasing KP281 and lowest probability (9%) of purchasing KP781. Since KP781 is the most expensive product selling for 2,500$ and has the most advanced features, the result that we observe can be attributed to lower income distribution of female users compared to male and lower fitness level distribution for female users vs. male users.
+
+```{r message = FALSE, echo = FALSE, tab.cap="gender distribution by product", tab.id = "prod_gender", tab.cap.style = "Table Caption"}
+product_gender_tbl <- df %>% group_by(Product, Gender) %>% summarise(user_count = n()) %>% data.table()
+product_gender_tbl <- product_gender_tbl %>% mutate(probs = case_when(Gender == tab_1$Gender ~ user_count/tab_1$population))
+product_gender_tbl
+```
+
+Let's conduct Chi-squared test to see whether results that we observe are statistically significant. P-value is very close to 0 indicating that our result is statistically significant and gender is indeed related to product choice. So, female users are more likely to buy KP281 and least likely to buy KP781. Male users also have the highest probability to buy KP281 (40%), however probabilities for KP481 and KP781 are not drastically different (29.8% and 31.7% accordingly).
+
+```{r message = FALSE, echo = FALSE, tab.cap="Chi-squared test", tab.id = "chi_test", tab.cap.style = "Table Caption"}
+tab_2 <- product_gender_tbl[,.(Product,Gender,user_count)] %>% pivot_wider(names_from = Product, values_from = user_count)
+tab_2
+tab_2 %>% select(-Gender, KP781) %>% chisq.test() %>% tidy()
+```
+
+\newpage
+
+However, lets explore other variable to see if there is a possible confounding effect and gender is not a primary driver of sales of different products. First of all, education, usage, fitness level, income and miles appear to be skewed to the right for KP781 product indicating that customer base for KP781 have higher level of fitness, higher usage, higher education and higher income when comparing to other products.
+
+```{r fig.cap="product correlation map", fig.id = "cor_map_prod", fig.cap.style = "Image Caption"}
+ggpairs(df,columns = c(2,4,6,7,8,9), aes(colour = Product), progress = FALSE, lower = "blank", upper = list(continuous = wrap("cor", size = 3))) + geom_density(alpha = 0.1)
+```
+
+Let's calculate probability distribution of customers of different products based on the fitness level. Interestingly, customers with fitness level from 1-3 are more likely to purchase KP281 and KP481 vs. KP781. Customers with fitness level of 4 are roughly equally likely to purchase either product.
+
+```{r , message = FALSE, echo = FALSE, tab.cap="Probability by fitness level", tab.id = "prob_by_fitness", tab.cap.style = "Table Caption"}
+tab_3 <- df %>% group_by(Product, Fitness) %>% summarise(count = n()) %>% ungroup()
+tab_3 <- tab_3 %>% group_by(Fitness) %>% mutate(prob_by_Fitness=case_when(Fitness == Fitness ~ count/sum(count)))
+tab_3
+```
+
+
+## Data Modelling for KP281
+
+In this section, I will explore relationships between variables more formally to distinguish core features of customers of different products. In the table below, I am converting all variables to binary format to construct correlation funnel for each product.
+
+```{r tab.cap="binarized data", tab.id = "df_KP281_bin", tab.cap.style = "Table Caption"}
+df_binarized <- df %>% binarize(n_bins = 5,thresh_infreq = 0.01, name_infreq = "OTHER")
+df_binarized %>% head(10) %>% glimpse()
+```
+
+Constructing correlation funnel where the most influencing features for a selected product are shown at the top and least impacting at the bottom.
+Product KP281 is correlated the most with lower income bracket. So, people who earn below 40,932 are more likely to purchase it. Also, people with fitness level of 3, below 14 years of education, average usage and female of 25-29 years of age are a likely customer for this product. Marital status has little influence in this case.
+
+```{r, message = FALSE, fig.cap="correlation funnel", fig.id = "dfKP281_corfun", fig.cap.style = "Image Caption"}
+df_corr_table_KP281 <- df_binarized %>% dplyr::select(-Product__KP481, - Product__KP781)
+df_corr_table_KP281 %>% correlate(Product__KP281) %>% plot_correlation_funnel()
+```
+
+Since usage and miles basically measure the same, I will drop Miles variable. Also, Marital Status has a very low correlation with KP281 ownership, so I will drop this variable for further analyses as well. 
+```{r}
+df_binarized_KP281 <- df %>% dplyr::select(-MaritalStatus, -Miles) %>%  binarize(n_bins = 5,thresh_infreq = 0.01, name_infreq = "OTHER")
+df_KP281 <- df %>% mutate(KP281User = case_when(Product == "KP281" ~ 1, .default = 0)) %>% mutate(GenderDummy = case_when(Gender == "Female" ~ 1, .default = 0) ) %>% dplyr::select(-MaritalStatus, -Miles, -Product, - Gender)
+```
+
+Here we can see that low income bracket is highly correlated with age of 23 and below and education of 14 years and below. However, correlation is below 0.8 for predictors suggesting that we shouldn't encounter multicollinearity.
+
+```{r, message = FALSE, fig.cap="Income correlation funnel", fig.id = "dfKP281_inc_corfun", fig.cap.style = "Image Caption"}
+df_corr_table_KP281 %>% select(-Product__KP281) %>% correlate(`Income__-Inf_40932`) %>% plot_correlation_funnel()
+```
+
+I am using logistic regression where Age, Fitness and Income variables were separated into 5 different bins, so that we can have a clear picture of what a customer profile for this product might be. Intercept includes customers with 29K to 45K of Income, 18 to 24 years of age and fitness level of 3. I tried out different combination of variables and arrived at only 3 variables that are significant to our results. As it turns out, individuals with 29K to 45K of Income, Fitness level of 3 and 43 to 50 years of age are 10x times more likely to buy KP281 than a baseline customer base. Having income in between 44K and 60K will further increase odds of buying by 0.2x.
+
+```{r tab.cap="logistic regression", tab.id = "df_KP281_logistic_reg", tab.cap.style = "Table Caption"}
+df_KP281 <- df_KP281 %>% mutate(KP281User = as.factor(KP281User)) %>% 
+                         mutate(Income = cut_interval(Income, 5, dig.lab = 10)) %>% 
+                         mutate(Age = cut_interval(Age, 5)) %>%  #Creating specific bins for age variable
+                         mutate(Fitness = as.factor(Fitness)) 
+
+df_KP281$Income <- relevel(df_KP281$Income, ref = "[29562,44565.8]")
+df_KP281$Age <- relevel(df_KP281$Age, ref = "[18,24.4]")
+df_KP281$Fitness <- relevel(df_KP281$Fitness, ref = "3")
+
+set.seed(123)
+df_KP281_split <- initial_split(df_KP281, prop = 0.8, strata = KP281User)
+
+# Create training data
+df_KP281_train <- df_KP281_split %>%
+                    training()
+df_KP281_test <- df_KP281_split %>%
+                    testing()
+fitted_logistic_model<- logistic_reg() %>%
+        # Set the engine
+        set_engine("glm") %>%
+        # Set the mode
+        set_mode("classification") %>%
+        # Fit the model
+        fit(KP281User~.-Education - GenderDummy - Usage, data = df_KP281_train)
+tidy(fitted_logistic_model, exponentiate = TRUE)
+
+```
+
+
+```{r}
+set.seed(124)
+# Class prediction
+pred_class <- predict(fitted_logistic_model,
+                      new_data = df_KP281_test,
+                      type = "class")
+
+
+# Prediction Probabilities
+pred_proba <- predict(fitted_logistic_model,
+                      new_data = df_KP281_test,
+                      type = "prob")
+
+
+pred_proba <- pred_proba %>% mutate(class = as.factor(case_when(.pred_1<0.5 ~ 0, .default = 1)))
+```
+
+```{r}
+
+df_KP281_results <- df_KP281_test %>%
+  dplyr::select(KP281User) %>%
+  bind_cols(pred_proba)
+
+```
+
+Here is a confusion matrix which demonstrates how resulting model performs on my test set.
+
+```{r tab.cap="confusion matrix", tab.id = "df_KP281_confusion_matrix", tab.cap.style = "Table Caption"}
+conf_mat(df_KP281_results, truth = KP281User,
+         estimate = class)
+```
+
+And corresponding ROC AUC which is 0.7 indicating that this model has predictive power.
+
+```{r tab.cap="ROC AUC", tab.id = "df_KP281_roc_auc", tab.cap.style = "Table Caption"}
+roc_auc(df_KP281_results, KP281User, .pred_1, event_level = "second")
+```
+
+In conclusion, ideal customer profile for KP281 product is someone of fitness level of 3 and 43 to 50 years of age and income in between 44K and 60K. They are 10.6x times more likely to buy than any other customer group.
+
+
+
+
